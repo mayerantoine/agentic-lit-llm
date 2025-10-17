@@ -1,7 +1,11 @@
 # Agentic Literature Review Generation
-Implementing Lit-LLM: An Agentic Workflow for Synthesizing Research Paper Literature Reviews
 
-An automated literature review generation system using **Agentic RAG** (Retrieval-Augmented Generation) for biomedical research papers. This tool helps researchers quickly generate comprehensive "Related Work" sections by intelligently retrieving, scoring, and synthesizing relevant academic papers.
+Implementing Lit-LLM: An Agentic Workflow for Synthesizing Research Paper Literature Reviews using OpenAI Agents.
+We reproduced and adapted the multi-document summarization approach from the paper "LitLLMs, LLMs for Literature Review: Are we there yet?" (2024) for our own use and testing.
+
+The general workflow starts with a paper idea and research questions. You then use keywords to search several databases and download abstracts related to background work, previous research, and gaps connected to your research question.
+
+Given your research idea and list of abstracts, this tool quickly generates comprehensive "Related Work" sections by intelligently retrieving, scoring, and synthesizing insights from your abstracts.
 
 
 ### Pipeline Flow
@@ -9,7 +13,7 @@ An automated literature review generation system using **Agentic RAG** (Retrieva
 1. **Data Loading**: Load abstracts from CSV (requires: `id`, `title`, `abstract`)
 2. **Vector Store Initialization**: Create/load ChromaDB index with embeddings
 3. **Hybrid Retrieval**: Retrieve top-k relevant papers using semantic + keyword search
-4. **Relevance Scoring**: AI agent scores papers using debate-style reasoning
+4. **Relevance Scoring**: AI agent scores papers using **debate-style reasoning**
 5. **Top-K Selection**: Select most relevant papers by probability score
 6. **Related Work Generation**: AI agent generates cohesive literature review text
 
