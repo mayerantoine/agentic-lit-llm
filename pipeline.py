@@ -83,6 +83,18 @@ class GenerationMetadata:
 
 
 @dataclass
+class IndexResult:
+    """Result from the index building phase."""
+    csv_path: str
+    total_abstracts: int
+    chunks_created: int
+    total_indexed: int
+    persist_directory: str
+    recreated: bool
+    config: PipelineConfig
+
+
+@dataclass
 class PipelineResult:
     """Complete result from the pipeline execution."""
     query: str
@@ -613,46 +625,142 @@ class LiteratureReviewPipeline:
     def __init__(self, config: PipelineConfig):
         """Initialize pipeline with configuration."""
         self.config = config
+        self.vector_store = None
+        self.all_abstracts = None
 
         # Load environment
         load_dotenv(override=True)
 
-    def run(self, csv_path: str, query: str) -> PipelineResult:
+    def build_index(self, csv_path: str) -> IndexResult:
         """
-        Execute the complete literature review generation pipeline.
+        Build or update the vector store index from CSV data.
+
+        This method performs Steps 1-3 of the pipeline:
+        1. Load and prepare data from CSV
+        2. Initialize vector store
+        3. Process and index documents
 
         Args:
             csv_path: Path to CSV file containing abstracts
-            query: Research query/abstract
 
         Returns:
-            PipelineResult with all outputs and metadata
+            IndexResult with indexing statistics and metadata
 
         Raises:
             ValidationError: If inputs are invalid
             ProcessingError: If processing fails
         """
         # Step 1: Load and prepare data
-        all_abstracts, _ = load_abstracts_from_csv(csv_path)
-        all_abstracts, samples_abstracts = prepare_abstracts_for_indexing(
-            all_abstracts,
+        self.all_abstracts, _ = load_abstracts_from_csv(csv_path)
+        self.all_abstracts, samples_abstracts = prepare_abstracts_for_indexing(
+            self.all_abstracts,
             self.config.random_seed
         )
 
         # Step 2: Initialize vector store
-        vector_store, _ = initialize_vector_store(
+        self.vector_store, _ = initialize_vector_store(
             samples_abstracts,
             self.config.persist_directory,
             self.config.recreate_index
         )
 
         # Step 3: Process and index documents
-        _, _ = process_and_index_documents(vector_store)
+        documents, index_metadata = process_and_index_documents(self.vector_store)
+
+        # Build result
+        return IndexResult(
+            csv_path=csv_path,
+            total_abstracts=len(self.all_abstracts),
+            chunks_created=len(documents) if documents else 0,
+            total_indexed=self.vector_store.get_document_count(),
+            persist_directory=self.config.persist_directory,
+            recreated=self.config.recreate_index,
+            config=self.config
+        )
+
+    def load_abstracts_only(self, csv_path: str) -> Dict[str, Any]:
+        """
+        Load abstracts from CSV without creating or updating the index.
+
+        This is a lightweight method for loading abstract metadata when you
+        want to generate reviews from an existing index without re-indexing.
+
+        Args:
+            csv_path: Path to CSV file containing abstracts
+
+        Returns:
+            Dict with metadata about loaded abstracts
+
+        Raises:
+            ValidationError: If CSV is invalid
+        """
+        # Load and prepare abstracts (same as build_index steps 1)
+        self.all_abstracts, _ = load_abstracts_from_csv(csv_path)
+        self.all_abstracts, _ = prepare_abstracts_for_indexing(
+            self.all_abstracts,
+            self.config.random_seed
+        )
+
+        return {
+            'csv_path': csv_path,
+            'total_abstracts': len(self.all_abstracts),
+            'columns': list(self.all_abstracts.columns)
+        }
+
+    def generate_review(self, query: str) -> PipelineResult:
+        """
+        Generate a literature review from an existing index.
+
+        This method performs Steps 4-7 of the pipeline:
+        4. Retrieve relevant papers using hybrid search
+        5. Score papers for relevance
+        6. Select top-k papers
+        7. Generate related work text
+
+        Requires that build_index() has been called first, or that the
+        vector store already exists at the configured persist_directory.
+
+        Args:
+            query: Research query/abstract
+
+        Returns:
+            PipelineResult with all outputs and metadata
+
+        Raises:
+            ProcessingError: If vector store not initialized or generation fails
+        """
+        # Ensure vector store is initialized
+        if self.vector_store is None:
+            # Try to load existing index
+            try:
+                samples_abstracts = []  # Empty list since we're loading existing
+                self.vector_store, _ = initialize_vector_store(
+                    samples_abstracts,
+                    self.config.persist_directory,
+                    recreate_index=False  # Never recreate when generating
+                )
+
+                if not self.vector_store.index_exists:
+                    raise ProcessingError(
+                        f"No index found at {self.config.persist_directory}. "
+                        "Please run build_index() first or use the 'index' command."
+                    )
+            except Exception as e:
+                raise ProcessingError(
+                    f"Failed to load vector store: {str(e)}. "
+                    "Please run build_index() first or use the 'index' command."
+                )
+
+        # Load abstracts if not already loaded
+        if self.all_abstracts is None:
+            raise ProcessingError(
+                "Abstracts not loaded. Please run load_abstracts_only() or build_index() first with the CSV path."
+            )
 
         # Step 4: Retrieve relevant papers
         retrieved_abstracts, retrieval_stats = retrieve_relevant_papers(
-            vector_store,
-            all_abstracts,
+            self.vector_store,
+            self.all_abstracts,
             query,
             self.config.hybrid_k
         )
@@ -687,6 +795,30 @@ class LiteratureReviewPipeline:
             retrieval_stats=retrieval_stats,
             scoring_stats=scoring_stats,
             generation_metadata=generation_metadata,
-            all_abstracts=all_abstracts,
+            all_abstracts=self.all_abstracts,
             config=self.config
         )
+
+    def run(self, csv_path: str, query: str) -> PipelineResult:
+        """
+        Execute the complete literature review generation pipeline.
+
+        This is a convenience method that combines build_index() and generate_review()
+        for backward compatibility and ease of use.
+
+        Args:
+            csv_path: Path to CSV file containing abstracts
+            query: Research query/abstract
+
+        Returns:
+            PipelineResult with all outputs and metadata
+
+        Raises:
+            ValidationError: If inputs are invalid
+            ProcessingError: If processing fails
+        """
+        # Build index (Steps 1-3)
+        self.build_index(csv_path)
+
+        # Generate review (Steps 4-7)
+        return self.generate_review(query)

@@ -43,7 +43,7 @@ class VectorStoreAbstract():
             else:
                 print(f"Creating new index at {self.persist_directory}")
 
- 
+
         self.text_splitter = RecursiveCharacterTextSplitter(
                         chunk_size=150,
                         chunk_overlap=20,
@@ -60,6 +60,26 @@ class VectorStoreAbstract():
                     embedding_function=self.embeddings,
                     persist_directory=self.persist_directory
                 )
+
+        # Delete existing collection if recreate_index=True
+        if self.recreate_index and self.index_exists:
+            try:
+                print(f"   Deleting existing collection...")
+                # Get all collection names and delete them
+                # ChromaDB creates collections, we need to delete and recreate
+                collection_name = self.vectorstore._collection.name
+                self.vectorstore._client.delete_collection(name=collection_name)
+                print(f"   Collection '{collection_name}' deleted successfully")
+
+                # Reinitialize vectorstore with empty collection
+                self.vectorstore = Chroma(
+                    embedding_function=self.embeddings,
+                    persist_directory=self.persist_directory
+                )
+                print(f"   New empty collection created")
+            except Exception as e:
+                print(f"   Warning: Could not delete existing collection: {e}")
+                print(f"   Continuing with existing collection...")
     
     def create_hybrid_retriever(self,documents, weights=[0.5, 0.5], k=20):
         """

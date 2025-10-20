@@ -25,6 +25,7 @@ from rich.panel import Panel
 from pipeline import (
     PipelineConfig,
     PipelineResult,
+    IndexResult,
     LiteratureReviewPipeline,
     ValidationError,
     ProcessingError,
@@ -118,6 +119,14 @@ def prompt_for_csv_path() -> str:
         return csv_path
 
 
+def prompt_for_recreate_index() -> bool:
+    """Interactively prompt whether to recreate the index."""
+    return typer.confirm(
+        "\nDo you want to recreate the index from scratch?",
+        default=False
+    )
+
+
 def prompt_for_research_query() -> str:
     """Interactively prompt for research query with validation."""
     while True:
@@ -197,6 +206,180 @@ def display_results(generated_text: str, top_k_abstracts: pd.DataFrame):
 
 
 @app.command()
+def index(
+    persist_dir: Annotated[str, typer.Option("--persist-dir", "-p", help="ChromaDB persist directory")] = "./corpus-data/chroma_db",
+    random_seed: Annotated[int, typer.Option("--random-seed", help="Random seed for data shuffling")] = 42,
+):
+    """
+    Build or update the vector store index from CSV abstracts.
+
+    This command performs the indexing phase only (Steps 1-3):
+    1. Load abstracts from CSV
+    2. Initialize vector store
+    3. Chunk and index documents
+
+    Use this to create or update your index database without generating any literature reviews.
+    """
+
+    print_section_header("INDEX MANAGEMENT")
+
+    console.print("\n[bold]Let's build/update your vector store index.[/bold]\n")
+
+    # Prompt for CSV path
+    csv_path = prompt_for_csv_path()
+
+    # Prompt for index recreation
+    recreate_index = prompt_for_recreate_index()
+
+    # Create pipeline configuration (minimal config for indexing only)
+    config = PipelineConfig(
+        persist_directory=persist_dir,
+        recreate_index=recreate_index,
+        random_seed=random_seed,
+    )
+
+    # Configuration summary
+    console.print(f"\nConfiguration:")
+    console.print(f"  CSV file: {csv_path}")
+    console.print(f"  Persist directory: {config.persist_directory}")
+    console.print(f"  Recreate index: {config.recreate_index}")
+    console.print(f"  Random seed: {config.random_seed}")
+
+    # Execute indexing
+    try:
+        with console.status("[bold cyan]Building index...[/bold cyan]", spinner="dots") as status:
+            pipeline = LiteratureReviewPipeline(config)
+            result = pipeline.build_index(csv_path)
+
+        console.print()
+        print_success("Index building completed!")
+        console.print()
+
+        # Display results
+        print_section_header("INDEXING RESULTS")
+        console.print(f"CSV Path: {result.csv_path}")
+        console.print(f"Total Abstracts: {result.total_abstracts}")
+        console.print(f"Chunks Created: {result.chunks_created}")
+        console.print(f"Total Indexed: {result.total_indexed}")
+        console.print(f"Persist Directory: {result.persist_directory}")
+        console.print(f"Index Recreated: {result.recreated}")
+
+        # Final message
+        console.print()
+        print_success(f"Index is ready at: {result.persist_directory}")
+        console.print("\n[dim]You can now use the 'generate' command to create literature reviews from this index.[/dim]")
+
+    except ValidationError as e:
+        print_error(f"Validation error: {str(e)}")
+        raise typer.Exit(1)
+    except ProcessingError as e:
+        print_error(f"Processing error: {str(e)}")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Unexpected error: {str(e)}")
+        raise typer.Exit(1)
+
+
+@app.command()
+def generate(
+    output: Annotated[str, typer.Option("--output", "-o", help="Output file path")] = "generated_related_work.txt",
+    persist_dir: Annotated[str, typer.Option("--persist-dir", "-p", help="ChromaDB persist directory")] = "./corpus-data/chroma_db",
+    csv_path_arg: Annotated[Optional[str], typer.Option("--csv-path", "-c", help="CSV file path (required for loading abstracts)")] = None,
+    hybrid_k: Annotated[int, typer.Option("--hybrid-k", help="Number of papers to retrieve")] = 50,
+    num_score: Annotated[Optional[int], typer.Option("--num-score", help="Number of papers to score (None = all)")] = None,
+    top_k: Annotated[int, typer.Option("--top-k", help="Number of top papers for related work")] = 3,
+    relevance_model: Annotated[str, typer.Option("--relevance-model", help="Model for relevance scoring")] = "gpt-4o-mini",
+    generation_model: Annotated[str, typer.Option("--generation-model", help="Model for text generation")] = "gpt-4o-mini",
+):
+    """
+    Generate a literature review from an existing index.
+
+    This command performs the generation phase only (Steps 4-7):
+    4. Retrieve relevant papers using hybrid search
+    5. Score papers for relevance
+    6. Select top-k papers
+    7. Generate related work section
+
+    Requires that an index already exists (created via 'index' or 'run' command).
+    You must provide the CSV path to load abstract metadata.
+    """
+
+    print_section_header("LITERATURE REVIEW GENERATION")
+
+    console.print("\n[bold]Let's generate your literature review from the existing index.[/bold]\n")
+
+    # Prompt for CSV path if not provided as argument
+    if csv_path_arg is None:
+        csv_path = prompt_for_csv_path()
+    else:
+        csv_path = csv_path_arg
+
+    # Prompt for research query
+    query = prompt_for_research_query()
+
+    # Display query
+    console.print(f"\n[bold]Research Query:[/bold]")
+    console.print(Panel(query, style="dim"))
+
+    # Create pipeline configuration
+    config = PipelineConfig(
+        persist_directory=persist_dir,
+        recreate_index=False,  # Never recreate when generating
+        hybrid_k=hybrid_k,
+        num_abstracts_to_score=num_score,
+        top_k=top_k,
+        relevance_model=relevance_model,
+        generation_model=generation_model,
+    )
+
+    # Configuration summary
+    console.print(f"\nConfiguration:")
+    console.print(f"  CSV file: {csv_path}")
+    console.print(f"  Output file: {output}")
+    console.print(f"  Persist directory: {config.persist_directory}")
+    console.print(f"  Hybrid retrieval k: {config.hybrid_k}")
+    console.print(f"  Papers to score: {'All' if config.num_abstracts_to_score is None else config.num_abstracts_to_score}")
+    console.print(f"  Top-k papers: {config.top_k}")
+    console.print(f"  Relevance model: {config.relevance_model}")
+    console.print(f"  Generation model: {config.generation_model}")
+
+    # Execute pipeline
+    try:
+        with console.status("[bold cyan]Running generation pipeline...[/bold cyan]", spinner="dots") as status:
+            pipeline = LiteratureReviewPipeline(config)
+
+            # Load abstracts (without re-indexing)
+            pipeline.load_abstracts_only(csv_path)
+
+            # Generate the review from existing index
+            result = pipeline.generate_review(query)
+
+        console.print()
+        print_success("Literature review generation completed!")
+        console.print()
+
+        # Save output
+        save_output(result.query, result.generated_text, result.top_k_abstracts, output)
+
+        # Display results
+        display_results(result.generated_text, result.top_k_abstracts)
+
+        # Final message
+        console.print()
+        print_success(f"Literature review has been generated and saved to: {output}")
+
+    except ValidationError as e:
+        print_error(f"Validation error: {str(e)}")
+        raise typer.Exit(1)
+    except ProcessingError as e:
+        print_error(f"Processing error: {str(e)}")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Unexpected error: {str(e)}")
+        raise typer.Exit(1)
+
+
+@app.command()
 def run(
     output: Annotated[str, typer.Option("--output", "-o", help="Output file path")] = "generated_related_work.txt",
     persist_dir: Annotated[str, typer.Option("--persist-dir", "-p", help="ChromaDB persist directory")] = "./corpus-data/chroma_db",
@@ -230,6 +413,9 @@ def run(
 
     # Prompt for CSV path
     csv_path = prompt_for_csv_path()
+
+    # Prompt for index recreation (override CLI flag with interactive choice)
+    recreate_index = prompt_for_recreate_index()
 
     # Prompt for research query
     query = prompt_for_research_query()
