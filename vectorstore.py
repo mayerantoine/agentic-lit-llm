@@ -1,11 +1,9 @@
 import pandas as pd
 import os
-from typing import Optional, List,Dict,Any
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Tuple
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter, HTMLSectionSplitter
-from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers import EnsembleRetriever

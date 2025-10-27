@@ -8,19 +8,28 @@ using an agentic RAG (Retrieval-Augmented Generation) pipeline.
 
 import os
 
+# Suppress macOS malloc stack logging warning (harmless but noisy on Darwin/ARM)
+# This must be set before any memory-intensive operations
+if os.environ.get("MallocStackLogging"):
+    os.environ["MallocStackLogging"] = ""
+
 # Set tokenizers parallelism to false to avoid fork warnings
 # This must be set before importing any libraries that use HuggingFace tokenizers
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import re
 from pathlib import Path
-from typing import Optional, Annotated
+from typing import Optional, Annotated, List
 
 import pandas as pd
-import numpy as np
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+# This ensures OPENAI_API_KEY and other config is available for the CLI
+load_dotenv(override=True)
 
 from pipeline import (
     PipelineConfig,
@@ -55,6 +64,20 @@ def print_section_header(title: str):
     """Print a section header."""
     console.print()
     console.print(Panel(title, style="bold cyan"))
+
+
+def extract_citations(generated_text: str) -> List[int]:
+    """
+    Extract unique citation IDs from generated text.
+
+    Args:
+        generated_text: Text containing citations in [id] format
+
+    Returns:
+        Sorted list of unique citation IDs
+    """
+    citations = re.findall(r'\[(\d+)\]', generated_text)
+    return sorted(set(int(c) for c in citations))
 
 
 def get_multiline_input(prompt: str) -> str:
@@ -152,9 +175,8 @@ def save_output(
     print_status(f"Saving output to: {output_path}")
 
     try:
-        # Extract citations
-        citations = re.findall(r'\[(\d+)\]', generated_text)
-        unique_citations = sorted(set(int(c) for c in citations))
+        # Extract citations using helper function
+        unique_citations = extract_citations(generated_text)
 
         with open(output_path, 'w') as f:
             f.write("=" * 80 + "\n")
@@ -194,9 +216,8 @@ def display_results(generated_text: str, top_k_abstracts: pd.DataFrame):
     console.print(generated_text)
     console.print()
 
-    # Extract and display citations
-    citations = re.findall(r'\[(\d+)\]', generated_text)
-    unique_citations = sorted(set(int(c) for c in citations))
+    # Extract and display citations using helper function
+    unique_citations = extract_citations(generated_text)
 
     console.print(f"\nCited Papers:")
     for paper_id in unique_citations:
@@ -307,6 +328,17 @@ def generate(
     print_section_header("LITERATURE REVIEW GENERATION")
 
     console.print("\n[bold]Let's generate your literature review from the existing index.[/bold]\n")
+
+    # Check if index exists first (fail fast before loading CSV)
+    persist_path = Path(persist_dir)
+    chroma_db_exists = (persist_path / "chroma.sqlite3").exists()
+
+    if not chroma_db_exists:
+        print_error(f"No index found at {persist_dir}")
+        console.print("\n[dim]You need to create an index first using one of these commands:[/dim]")
+        console.print("  [cyan]python main.py index[/cyan]  - Build index only")
+        console.print("  [cyan]python main.py run[/cyan]    - Build index and generate review")
+        raise typer.Exit(1)
 
     # Prompt for CSV path if not provided as argument
     if csv_path_arg is None:

@@ -2,13 +2,13 @@
 Literature Review Generation Pipeline
 
 This module contains the core business logic for automated literature review generation.
-All functions are pure (no side effects like printing) andP return results with metadata.
+All functions are pure (no side effects like printing) and return results with metadata.
 This makes them reusable in different contexts (CLI, notebooks, APIs, tests).
 """
 
 import asyncio
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Annotated
 
@@ -155,6 +155,13 @@ def load_abstracts_from_csv(csv_path: str) -> Tuple[pd.DataFrame, Dict[str, Any]
         df = pd.read_csv(csv_path)
     except Exception as e:
         raise ValidationError(f"Failed to read CSV: {str(e)}")
+
+    # Validate CSV is not empty
+    if len(df) == 0:
+        raise ValidationError(
+            f"CSV file is empty: {csv_path}. "
+            f"Please provide a CSV file with at least one abstract."
+        )
 
     # Validate required columns
     required_columns = ['id', 'title', 'abstract']
